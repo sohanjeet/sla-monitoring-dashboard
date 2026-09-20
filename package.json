@@ -1,0 +1,16 @@
+{
+  "name": "sla-monitoring-dashboard-deployment",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@10.9.3",
+  "scripts": {
+    "test": "npm run test --prefix function",
+    "check": "npm run check --prefix function",
+    "build:function": "npm run build --prefix function",
+    "build:frontend": "npm run build --prefix frontend",
+    "build": "npm run build:function && npm run build:frontend"
+  },
+  "devDependencies": {
+    "serverless": "4.42.0"
+  }
+}

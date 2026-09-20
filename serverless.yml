@@ -1,0 +1,55 @@
+service: sla-monitoring-import
+org: sohanjeetpatra
+app: sla-monitoring-dashboard
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: ${opt:region, 'ap-south-1'}
+  memorySize: 1024
+  # API Gateway HTTP API integrations have a 29-second maximum.
+  timeout: 29
+  httpApi:
+    payload: '2.0'
+    cors:
+      allowedOrigins:
+        - ${env:ALLOWED_ORIGIN}
+      allowedHeaders:
+        - Content-Type
+        - X-File-Name
+      allowedMethods:
+        - GET
+        - POST
+        - OPTIONS
+  environment:
+    DATABASE_URL: ${env:DATABASE_URL}
+    DATABASE_SSL: ${env:DATABASE_SSL, 'require'}
+    ALLOWED_ORIGIN: ${env:ALLOWED_ORIGIN}
+    MAX_UPLOAD_BYTES: ${env:MAX_UPLOAD_BYTES, '4194304'}
+
+functions:
+  importCsv:
+    handler: function/dist/handler.handler
+    events:
+      - httpApi:
+          method: POST
+          path: /imports
+  getLogs:
+    handler: function/dist/handler.handler
+    events:
+      - httpApi:
+          method: GET
+          path: /api/logs
+  getStats:
+    handler: function/dist/handler.handler
+    events:
+      - httpApi:
+          method: GET
+          path: /api/stats
+
+package:
+  patterns:
+    - '!frontend/**'
+    - '!function/src/**'
+    - 'function/dist/**'
+    - 'function/node_modules/**'
