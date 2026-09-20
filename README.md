@@ -1,65 +1,48 @@
 # SLA Monitoring Dashboard
 
-The CSV ingestion function and the PostgreSQL-backed dashboard query layer are implemented.
+Live dashboard: https://sla-monitoring-dashboard-tau.vercel.app
+Live API: https://b45bh83jw4.execute-api.ap-south-1.amazonaws.com
 
-## Planned architecture
+Last verified live: 2026-09-20.
 
-The React/Vite frontend will upload monitoring data to a stateless TypeScript serverless function. The function parses, validates, normalizes, exact-deduplicates, and persists reports in PostgreSQL transactionally. The frontend will later query persisted records and render a single-screen dashboard.
+## Architecture
 
-- `frontend/`: React + Vite + TypeScript client
-- `function/`: TypeScript serverless-function boundary and processing placeholders
-- `database/`: PostgreSQL schema placeholder
-- `sample-data/`: reserved for non-source fixtures; supplied assignment files remain outside this scaffold and unchanged
+The React/Vite single-page dashboard is hosted on Vercel. It sends CSV uploads and dashboard queries directly to an AWS API Gateway HTTP API. API Gateway invokes stateless TypeScript AWS Lambda functions, which validate and normalize the data before writing it transactionally to Neon PostgreSQL. The dashboard reads the persisted data via the same API.
+
+`Vercel frontend -> API Gateway -> Lambda -> Neon PostgreSQL`
+
+The browser is deliberately limited to `VITE_API_BASE_URL`; `DATABASE_URL` is Lambda-only. API Gateway allows the production Vercel origin, `GET`, `POST`, and `OPTIONS`.
 
 ## Local setup
 
-1. Copy `.env.example` to `.env` and set local values.
-2. Install dependencies in both `frontend/` and `function/`.
-3. Run `npm run dev` from `frontend/` for the client.
-4. Run `npm run build` in either package to verify compilation.
+1. Install dependencies in the repository root, `function/`, and `frontend/` with `npm install`.
+2. Copy `function/.env.example` to `function/.env`. Set `DATABASE_URL`, retain `DATABASE_SSL=require`, and set `ALLOWED_ORIGIN` to the local frontend origin.
+3. Copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_BASE_URL` to the API being used for development.
+4. Run `npm run test`, `npm run check`, and `npm run build` from the repository root. Run `npm run dev --prefix frontend` to serve the client.
 
-## CSV import endpoint
+Real `.env` files are ignored; never commit database or cloud credentials.
 
-`POST /imports` is implemented as an AWS Lambda/API Gateway HTTP API v2 function, with deployment configuration in `serverless.yml`. It accepts either:
+## Deployment
 
-- `multipart/form-data` with exactly one `file` field containing a `.csv` file; or
-- a raw UTF-8 CSV body with `Content-Type: text/csv` or `application/csv` (optional `X-File-Name`).
+Build the Lambda with `npm run build:function`. Deploy `serverless.yml` with the production `DATABASE_URL`, `DATABASE_SSL=require`, and `ALLOWED_ORIGIN=https://sla-monitoring-dashboard-tau.vercel.app`. Build the Vite app with `npm run build:frontend` and deploy it to Vercel with `VITE_API_BASE_URL=https://b45bh83jw4.execute-api.ap-south-1.amazonaws.com`.
 
-Uploads are limited to 4 MiB by default (`MAX_UPLOAD_BYTES`, capped at 25 MiB), and invalid uploads return structured JSON errors. The function processes each request in memory, uses the existing parser/cleaner module, and stores the dataset, normalized reports, and rejected rows in one PostgreSQL transaction. Any persistence failure rolls back the entire upload.
+The API exposes `POST /imports`, `GET /api/logs`, and `GET /api/stats`. Uploads accept one CSV `file` multipart field or a raw UTF-8 CSV body. Queries support a UTC `date`, or an inclusive UTC `from`/`to` range, a service filter, and pagination. Errors use JSON responses and appropriate 4xx/5xx statuses.
 
-A successful request returns HTTP 201 with a JSON summary such as:
+## Data findings and assumptions
 
-```json
-{
-  "totalRows": 120,
-  "insertedRows": 115,
-  "duplicates": 2,
-  "rejectedRows": 5,
-  "issues": { "invalid_timestamp": 3, "duplicate_exact": 2 }
-}
-```
+The supplied logs use three valid timestamp representations (RFC 3339 UTC, RFC 3339 with an offset, and ten-digit Unix seconds) and are not in chronological row order. Timestamps are normalized to UTC and stored as `observed_at`; raw timestamp evidence is retained. The source datasets overlap, so every upload receives a distinct `dataset_id` rather than being deduplicated across uploads.
 
-Set `DATABASE_URL` before deployment. Set `DATABASE_SSL=require` for managed PostgreSQL instances that require TLS. No credentials are committed to this repository.
+Other quality rules are:
 
-## Dashboard query endpoints
+- Exact duplicate reports are rejected with an audit record; malformed rows and the invalid `999` status are also retained in `import_rejections`.
+- Blank and negative latencies retain valid status evidence but become `NULL` for latency aggregates. Seconds are normalized to milliseconds.
+- Availability is calculated once per dataset/service/UTC slot: unanimous 2xx is healthy, unanimous 5xx is unavailable, and mixed or unmapped status slots are excluded. A slot contributes latency only when it has exactly one valid normalized latency value.
+- Statistics show overall and per-service availability, counts, average latency, p95 latency, and the 99.9% SLA status because these directly support on-call and billing review.
 
-`GET /api/logs` returns normalized report records in deterministic chronological
-order. It accepts either `date=YYYY-MM-DD` or both `from=YYYY-MM-DD` and
-`to=YYYY-MM-DD`, plus optional `service=svc-auth` and pagination parameters
-`page` (default `1`) and `limit` (default `50`, maximum `100`). Dates are
-UTC calendar days and range endpoints are inclusive.
+## Improvements with more time
 
-`GET /api/stats` accepts the same date and service filters and returns overall
-and per-service counts, availability, average latency, p95 latency, and the
-SLA outcome.
+- Add an immutable import-history/audit view and surface rejected/conflicted-slot counts in the dashboard.
+- Add automated browser integration tests and deployment smoke checks.
+- Add alerts or incident timelines after agreeing alert thresholds and retention policy with stakeholders.
 
-Statistics follow the documented data findings: records are collapsed by
-`dataset_id`, service, and timestamp before availability is calculated; only
-unanimous 2xx slots are successful and unanimous 5xx slots are failed. Mixed
-health slots and unmapped statuses are excluded from SLA counts. Latency uses a
-slot only when its reports have exactly one non-null normalized latency value.
-The SLA target is 99.9% availability; values at or above it are `met`.
-
-## Scope notes
-
-CSV findings, cleaning rules, dashboard statistics, live URLs, and deployment instructions will be documented after the corresponding implementation work. Authentication, Redux, Docker, CI, and multi-tenancy are intentionally out of scope.
+Authentication, multi-tenancy, Docker, and CI are intentionally out of scope for this assignment.
